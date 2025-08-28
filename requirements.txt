@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+httpx
+python-multipart
+pytest
+openai-whisper
+transformers
+torch
+pydantic
+langgraph>=0.2.50        # core runtime
+langgraph-cli>=0.1.70    # local server / dev tools
+tenacity                 # retry utilities
+python-dotenv           # for loading .env files

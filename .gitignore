@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Environment files (IMPORTANT: Never commit API keys!)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Project specific
+jobs/*.json
+uploads/*
+!uploads/.gitkeep
+logs/
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Package files
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Temporary files
+*.tmp
+*.bak
+*~
+test_*.py

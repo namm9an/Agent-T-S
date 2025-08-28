@@ -1,0 +1,174 @@
+version: 1
+workflow:
+  id: transcribe_summarize_v1
+  description: "Transcription (placeholder) + Summarization (Qwen) orchestrated workflow"
+
+  inputs_schema:
+    type: object
+    required: [action, job_id, inputs]
+    properties:
+      action:
+        type: string
+        enum: ["transcribe", "summarize"]
+      job_id:
+        type: string
+      inputs:
+        type: object
+        properties:
+          file_path: { type: string }
+          diarize: { type: boolean }
+          summary_type: { type: string }
+          text: { type: string }
+          job_id: { type: string }
+      callback_url:
+        type: string
+      qwen_endpoint:
+        type: string
+      whisper_endpoint:
+        type: string
+
+  env:
+    required:
+      - LANGGRAPH_CALLBACK_SECRET
+      - QWEN_API_KEY
+    optional:
+      - JOBS_API_BASE_URL
+
+  nodes:
+    - id: route_by_action
+      type: switch
+      on: $.action
+      cases:
+        - match: "transcribe"
+          to: transcribe_placeholder
+        - match: "summarize"
+          to: summarize_prepare_text
+
+    - id: transcribe_placeholder
+      type: function
+      code: |
+        def run(payload):
+            job_id = payload["job_id"]
+            ipt = payload.get("inputs", {})
+            file_path = ipt.get("file_path")
+            diarize = bool(ipt.get("diarize", False))
+
+            # Placeholder transcript; replace with actual HTTP call to Whisper when available.
+            transcript = f"[PLACEHOLDER] Transcribed {file_path}; diarize={diarize}"
+            return {
+              "job_id": job_id,
+              "status": "completed",
+              "result": {"transcript": transcript, "summary": None},
+              "error": None
+            }
+      to: maybe_callback_transcribe
+
+    - id: maybe_callback_transcribe
+      type: function
+      code: |
+        import requests, os
+
+        def run(payload, ctx):
+            callback_url = ctx["root"].get("callback_url")
+            secret = os.environ.get("LANGGRAPH_CALLBACK_SECRET")
+            out = payload
+
+            if callback_url:
+                headers = {"Content-Type": "application/json"}
+                if secret:
+                    headers["X-LangGraph-Secret"] = secret
+                requests.post(callback_url, json=out, headers=headers, timeout=30)
+
+            return out
+
+    - id: summarize_prepare_text
+      type: function
+      code: |
+        import os, requests
+
+        def run(payload):
+            root = payload
+            ipt = root.get("inputs", {})
+            text = ipt.get("text")
+            from_job_id = ipt.get("job_id")
+            summary_type = ipt.get("summary_type", "executive")
+
+            if text:
+                return {"text": text, "summary_type": summary_type}
+
+            base = os.environ.get("JOBS_API_BASE_URL")
+            if base and from_job_id:
+                url = f"{base.rstrip('/')}/jobs/{from_job_id}"
+                r = requests.get(url, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+                transcript = (data.get("job") or {}).get("result", {}).get("transcript")
+                if transcript:
+                    return {"text": transcript, "summary_type": summary_type}
+
+            raise RuntimeError("No text available for summarization. Provide inputs.text or set JOBS_API_BASE_URL and inputs.job_id.")
+      to: summarize_qwen
+
+    - id: summarize_qwen
+      type: http_request
+      request:
+        base_url: ${.qwen_endpoint}
+        method: POST
+        path: /chat/completions
+        headers:
+          Content-Type: application/json
+          Authorization: Bearer ${env.QWEN_API_KEY}
+        json:
+          model: "Qwen/Qwen2.5-14B-Instruct"
+          messages:
+            - role: system
+              content: "You are a helpful assistant that produces concise summaries."
+            - role: user
+              content: >
+                Provide a ${.summarize_prepare_text.summary_type} summary for the following text.
+                Return concise bullet points in JSON under keys: {"type": "<type>", "bullets": ["..."]}.
+                Text:
+                ${.summarize_prepare_text.text}
+      transform: |
+        def run(response, payload):
+            job_id = payload["job_id"]
+            ipt = payload.get("inputs", {})
+            summary_type = (ipt.get("summary_type") or "executive")
+            try:
+                content = response["json"]["choices"][0]["message"]["content"]
+            except Exception:
+                content = None
+
+            return {
+              "job_id": job_id,
+              "status": "completed",
+              "result": {
+                "transcript": None,
+                "summary": {
+                  "type": summary_type,
+                  "content": content
+                }
+              },
+              "error": None
+            }
+      to: maybe_callback_summarize
+
+    - id: maybe_callback_summarize
+      type: function
+      code: |
+        import requests, os
+
+        def run(payload, ctx):
+            callback_url = ctx["root"].get("callback_url")
+            secret = os.environ.get("LANGGRAPH_CALLBACK_SECRET")
+
+            if callback_url:
+                headers = {"Content-Type": "application/json"}
+                if secret:
+                    headers["X-LangGraph-Secret"] = secret
+                requests.post(callback_url, json=payload, headers=headers, timeout=30)
+
+            return payload
+
+  entry: route_by_action
+
