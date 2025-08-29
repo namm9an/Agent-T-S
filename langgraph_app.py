@@ -12,8 +12,7 @@ from typing import Any, Dict, Optional
 from pathlib import Path
 
 import httpx
-from langgraph.graph import Graph, StateGraph, END
-from langgraph.prebuilt import ToolExecutor, ToolInvocation
+from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel
 
@@ -283,7 +282,9 @@ async def process_request(request_data: Dict[str, Any]) -> Dict[str, Any]:
     """Process a workflow request"""
     try:
         state = WorkflowState(**request_data)
-        result = await app.ainvoke(state)
+        # Add configuration for checkpointer
+        config = {"configurable": {"thread_id": request_data.get("job_id", "default")}}
+        result = await app.ainvoke(state, config=config)
         
         return {
             "job_id": result.get("job_id"),
