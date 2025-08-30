@@ -1,6 +1,10 @@
 import os
 import traceback
 from typing import Any, Dict, Optional
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile, Header
 from fastapi.responses import JSONResponse
@@ -186,6 +190,71 @@ async def summarize(
     background_tasks.add_task(process_summarize, job["id"], inputs)
     return JSONResponse(status_code=202, content=EnqueueResponse(id=job["id"]).model_dump())
 
+
+@app.post("/transcribe-summarize")
+async def transcribe_and_summarize(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    summary_type: str = Query("executive"),
+    wait: bool = Query(True),
+):
+    """Combined endpoint for transcription and summarization"""
+    # Save uploaded file
+    upload_path = storage.allocate_upload_path(file.filename)
+    content = await file.read()
+    with open(upload_path, "wb") as f:
+        f.write(content)
+
+    # Create transcription job
+    inputs = {
+        "file_path": str(upload_path), 
+        "diarize": False,
+        "summary_type": summary_type
+    }
+    job = storage.create_job("transcribe", inputs=inputs)
+    
+    if wait:
+        # Process transcription
+        process_transcribe(job["id"], str(upload_path), False)
+        job = storage.load_job(job["id"])  # refresh
+        
+        # If transcription successful, create summarization job
+        if job["status"] == "completed" and job["result"].get("transcript"):
+            summary_inputs = {
+                "text": job["result"]["transcript"],
+                "summary_type": summary_type
+            }
+            summary_job = storage.create_job("summarize", inputs=summary_inputs)
+            process_summarize(summary_job["id"], summary_inputs)
+            summary_job = storage.load_job(summary_job["id"])
+            
+            # Combine results
+            if summary_job["status"] == "completed":
+                job["result"]["summary"] = summary_job["result"].get("summary")
+                storage.set_result(job["id"], job["result"])
+        
+        return {"job": job}
+    
+    # For async, just start transcription
+    background_tasks.add_task(process_transcribe, job["id"], str(upload_path), False)
+    return JSONResponse(status_code=202, content={"job": job})
+
+@app.get("/jobs/{job_id}/progress")
+async def get_job_progress(job_id: str):
+    """Get job progress information"""
+    job = storage.load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Mock progress for now
+    progress = {
+        "status": job["status"],
+        "percentage": 100 if job["status"] == "completed" else 50,
+        "completed_chunks": 1,
+        "total_chunks": 1,
+        "completed": job["status"] in ["completed", "failed"]
+    }
+    return {"progress": progress}
 
 @app.get("/jobs/{job_id}", response_model=JobResponse)
 async def get_job(job_id: str):

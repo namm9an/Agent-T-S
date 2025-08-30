@@ -13,6 +13,10 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks
 from fastapi.responses import JSONResponse

@@ -1,6 +1,10 @@
 import os
 import time
 from typing import Any, Dict, Optional, Tuple
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 from .remote_client import RemoteClient
 

@@ -21,10 +21,11 @@ ENV/
 *.swo
 .DS_Store
 
-# Project specific
-jobs/*.json
-uploads/*
-!uploads/.gitkeep
+# Project specific - Runtime data
+data/
+!data/.gitkeep
+jobs/
+uploads/
 logs/
 *.log
 

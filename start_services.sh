@@ -10,7 +10,8 @@ killall streamlit 2>/dev/null
 
 # Start backend
 echo "Starting backend API server..."
-nohup python3 app_e2e.py > backend.log 2>&1 &
+mkdir -p data/logs
+nohup python3 app_e2e.py > data/logs/backend.log 2>&1 &
 BACKEND_PID=$!
 echo "Backend started with PID: $BACKEND_PID"
 
@@ -26,7 +27,7 @@ done
 
 # Start Streamlit
 echo "Starting Streamlit UI..."
-nohup streamlit run streamlit_app.py --server.headless true --server.port 8501 > frontend.log 2>&1 &
+nohup streamlit run streamlit_app.py --server.headless true --server.port 8501 > data/logs/frontend.log 2>&1 &
 FRONTEND_PID=$!
 echo "Frontend started with PID: $FRONTEND_PID"
 
@@ -43,8 +44,8 @@ if ps -p $BACKEND_PID > /dev/null && ps -p $FRONTEND_PID > /dev/null; then
     echo "📍 Streamlit UI: http://localhost:8501"
     echo ""
     echo "📝 Logs:"
-    echo "   - Backend: backend.log"
-    echo "   - Frontend: frontend.log"
+    echo "   - Backend: data/logs/backend.log"
+    echo "   - Frontend: data/logs/frontend.log"
     echo ""
     echo "To stop services, run: killall python3 streamlit"
 else
