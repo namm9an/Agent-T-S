@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Start FastAPI Application Server
+# Start Integrated LangGraph AI Agent Service
 
 set -euo pipefail
 
 # Change to project root
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")"
 
 # Load environment variables
 if [ -f .env ]; then
@@ -13,24 +13,24 @@ if [ -f .env ]; then
     source .env
     set +a
 else
-    echo "Warning: .env file not found. Using default values."
+    echo "Error: .env file not found!"
+    exit 1
 fi
 
 # Create required directories
 mkdir -p jobs uploads
 
 echo "========================================="
-echo "Starting FastAPI Application"
+echo "Starting LangGraph AI Agent Service"
 echo "========================================="
-echo "Host: 0.0.0.0"
+echo "Service: Integrated (FastAPI + LangGraph)"
 echo "Port: 8000"
 echo "Swagger UI: http://localhost:8000/docs"
 echo "========================================="
-echo "Configuration:"
-echo "  LangGraph: ${LANGGRAPH_ENDPOINT:-Not configured}"
-echo "  Qwen: ${QWEN_ENDPOINT:-Not configured}"
-echo "  Whisper: ${WHISPER_ENDPOINT:-Not configured}"
+echo "Agents:"
+echo "  - Whisper: ${WHISPER_ENDPOINT}"
+echo "  - Qwen: ${QWEN_ENDPOINT}"
 echo "========================================="
 
-# Start FastAPI with uvicorn
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# Start the integrated service
+python3 app_integrated.py
