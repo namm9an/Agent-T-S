@@ -65,6 +65,13 @@ LANGUAGE_DETECTION_MODEL = os.getenv("LANGUAGE_DETECTION_MODEL", "papluca/xlm-ro
 LANGUAGE_DETECTION_TIMEOUT_SEC = int(os.getenv("LANGUAGE_DETECTION_TIMEOUT_SEC", "60"))
 LANGUAGE_DETECTION_MIN_CONFIDENCE = float(os.getenv("LANGUAGE_DETECTION_MIN_CONFIDENCE", "0.5"))  # Lowered from 0.7 to 0.5
 
+# ASR tuning (env-configurable)
+CHUNK_DURATION_SEC = int(os.getenv("CHUNK_DURATION_SEC", "10"))
+CHUNK_OVERLAP_SEC = int(os.getenv("CHUNK_OVERLAP_SEC", "1"))
+TRANSCRIBE_CONCURRENCY = int(os.getenv("TRANSCRIBE_CONCURRENCY", "5"))
+ASR_RETRY_ATTEMPTS = int(os.getenv("ASR_RETRY_ATTEMPTS", "3"))
+ASR_TIMEOUT_SEC = int(os.getenv("ASR_TIMEOUT_SEC", "60"))
+
 # Storage paths
 JOBS_DIR = Path("./jobs")
 UPLOADS_DIR = Path("./uploads")
@@ -320,7 +327,7 @@ async def transcribe_agent(state: WorkflowState) -> Dict[str, Any]:
             transcripts: List[str] = []
 
             async def transcribe_chunk_e2e(chunk_path: str, chunk_idx: int) -> Optional[str]:
-                retries = 3
+                retries = ASR_RETRY_ATTEMPTS
                 for attempt in range(retries):
                     try:
                         logger.info(f"Processing chunk {chunk_idx+1}: {chunk_path} (attempt {attempt+1})")
@@ -342,9 +349,10 @@ async def transcribe_agent(state: WorkflowState) -> Dict[str, Any]:
                         headers = {"Authorization": f"Bearer {WHISPER_API_KEY}", "Content-Type": "application/json"}
                         
                         logger.info(f"Sending chunk {chunk_idx+1} to E2E endpoint")
-                        async with httpx.AsyncClient(timeout=60.0) as client_http:
-                            # Use the Triton inference format - the endpoint should already have the model path
-                            endpoint_url = WHISPER_ENDPOINT.rstrip('/') if WHISPER_ENDPOINT else "https://infer.e2enetworks.net/project/p-6530/endpoint/is-6356/v1/models/openai/whisper-large-v3:predict"
+                        async with httpx.AsyncClient(timeout=ASR_TIMEOUT_SEC) as client_http:
+                            # OpenAI-compatible endpoint base URL from env
+                            endpoint_url = WHISPER_ENDPOINT.rstrip('/') if WHISPER_ENDPOINT else "https://infer.e2enetworks.net/project/p-6530/endpoint/is-6356/v1/"
+                            logger.info(f"POST {endpoint_url}")
                             resp = await client_http.post(endpoint_url, json=payload, headers=headers)
                         logger.info(f"Chunk {chunk_idx+1} response status: {resp.status_code}")
                         
