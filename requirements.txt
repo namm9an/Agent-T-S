@@ -11,3 +11,15 @@ langgraph>=0.2.50        # core runtime
 langgraph-cli>=0.1.70    # local server / dev tools
 tenacity                 # retry utilities
 python-dotenv           # for loading .env files
+# Fast diarization alternatives (much faster than pyannote)
+webrtcvad==2.0.10       # Ultra-fast VAD (1-2 seconds for 4-min audio)
+numpy                   # For audio processing
+# Optional: Keep pyannote as fallback only
+# pyannote.audio==3.1.1
+torchaudio
+librosa
+soundfile
+fastapi[all]
+
+# Keep existing
+psutil                  # resource monitoring (fallback thresholds)

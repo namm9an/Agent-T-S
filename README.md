@@ -28,14 +28,14 @@ You can start with .env.example and export/update variables in your shell.
 ---
 
 Run
-- uvicorn app.main:app --reload
+- bash setup_env.sh && bash start_services.sh
 
 Health check
 - GET /health → { ok: true, workflow_id: "..." }
 
 ---
 
-Endpoints
+Endpoints (FastAPI direct, current branch)
 1) POST /transcribe
 - Form fields: file (required), diarize (bool, default=false), wait (query, default=false)
 - Behavior: saves file to ./uploads, creates a job, triggers LangGraph action="transcribe" with { file_path, diarize }.
@@ -59,15 +59,13 @@ Endpoints
 
 Testing
 1) Preflight
-- export LANGGRAPH_ENDPOINT=https://your-langgraph/trigger
-- export LANGGRAPH_RESULT_ENDPOINT=https://your-langgraph/result   # if using polling
-- export LANGGRAPH_WORKFLOW_ID=transcribe_summarize_v1
-- export LANGGRAPH_CALLBACK_URL=http://localhost:8000/callbacks/langgraph
-- export LANGGRAPH_CALLBACK_SECRET={{LANGGRAPH_CALLBACK_SECRET}}
-- export MODEL_API_KEY={{MODEL_API_KEY}}
-- export QWEN_ENDPOINT=https://infer.e2enetworks.net/project/p-6530/endpoint/is-6346/v1/
-- export WHISPER_ENDPOINT=https://<your-whisper-service>
-- uvicorn app.main:app --reload
+- export TRANSCRIBE_PROVIDER=e2e|openai   # default e2e
+- export WHISPER_ENDPOINT=https://<your-e2e-whisper>  # required for e2e
+- export WHISPER_API_KEY=...              # token for e2e or openai
+- export QWEN_ENDPOINT=...
+- export QWEN_API_KEY=...
+- export API_URL=http://localhost:8000     # for Streamlit
+- bash start_services.sh
 
 2) Synchronous (if LangGraph returns final result or result endpoint is available)
 - curl -F "file=@/path/to/test.mp3" -F "diarize=false" "http://localhost:8000/transcribe?wait=true"
@@ -181,6 +179,12 @@ $ curl -X POST "http://localhost:8000/callbacks/langgraph" \
 ```
 
 Notes
+- Provider selection:
+  - Default path uses E2E Whisper via HTTP. Set TRANSCRIBE_PROVIDER=openai to use OpenAI SDK (lazy-imported).
+  - Streamlit exposes a diarization toggle. Backend accepts form fields: summary_type, diarize.
+- E2E integration test (optional):
+  - export WHISPER_ENDPOINT=..., WHISPER_API_KEY=..., SAMPLE_AUDIO=./samples/short.wav
+  - PYTHONPATH=. pytest -q tests/integration/test_e2e_whisper.py
 - For /summarize to work, Terminal A must have QWEN_API_KEY exported before starting `langgraph serve`.
 - /transcribe returns a placeholder transcript in this v1 workflow; set WHISPER_ENDPOINT for future integration.
 - If your LangGraph server exposes a result endpoint, set LANGGRAPH_RESULT_ENDPOINT in FastAPI; otherwise callbacks or immediate responses are used.
