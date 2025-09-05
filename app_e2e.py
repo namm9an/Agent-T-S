@@ -49,10 +49,7 @@ QWEN_ENDPOINT = os.getenv("QWEN_ENDPOINT", "https://infer.e2enetworks.net/projec
 QWEN_API_KEY = os.getenv("QWEN_API_KEY", "")
 WHISPER_API_KEY = os.getenv("WHISPER_API_KEY", "")
 WHISPER_ENDPOINT = os.getenv("WHISPER_ENDPOINT", "")  # E2E Whisper endpoint (HTTP or OpenAI-compatible base_url)
-TRANSCRIBE_PROVIDER = "openai"  # Use OpenAI SDK for is-6356
 TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL", "openai/whisper-large-v3")
-# Force OpenAI SDK for is-6356 endpoint
-USE_OPENAI_SDK_DEFAULT = True  # Changed to True for OpenAI-compatible endpoint
 
 # Diarization guardrails (configurable) - Fast VAD targets
 DIARIZATION_TIMEOUT_SEC = int(os.getenv("DIARIZATION_TIMEOUT_SEC", "5"))  # 5s timeout for simple diarization
@@ -215,219 +212,96 @@ async def transcribe_agent(state: WorkflowState) -> Dict[str, Any]:
         logger.info(f"Starting transcription: {state.file_path}")
         start_time = asyncio.get_event_loop().time()
         
-        # Check if we should use OpenAI SDK path or E2E HTTP path
-        USE_OPENAI_SDK = False
-        if USE_OPENAI_SDK_DEFAULT and TRANSCRIBE_PROVIDER == "openai" and WHISPER_API_KEY:
+        # Simple OpenAI SDK method - clean and works
+        import openai
+        
+        if not WHISPER_API_KEY or not WHISPER_ENDPOINT:
+            state.error = "WHISPER_API_KEY or WHISPER_ENDPOINT not configured"
+            state.status = "failed"
+            return state.model_dump()
+        
+        logger.info("Using OpenAI SDK for transcription")
+        client = openai.OpenAI(
+            api_key=WHISPER_API_KEY,
+            base_url=WHISPER_ENDPOINT.rstrip('/')
+        )
+        
+        try:
+            chunks = await split_audio_fast(state.file_path)
+        except Exception as e:
+            logger.error(f"Failed to split audio: {e}")
+            chunks = [state.file_path]  # Fallback to original file
+        temp_dir = Path(chunks[0]).parent if len(chunks) > 1 else None
+
+        batch_size = 5
+        transcripts: List[str] = []
+
+        async def transcribe_chunk(chunk_path: str, chunk_idx: int) -> Optional[str]:
             try:
-                import openai  # lazy import
-                USE_OPENAI_SDK = True
-                logger.info("Using OpenAI SDK for transcription")
-            except ImportError as e:
-                logger.warning("OpenAI SDK not installed, falling back to E2E HTTP: %s", e)
-                USE_OPENAI_SDK = False
-            
-        if USE_OPENAI_SDK:
-                # Use E2E base URL for OpenAI-compatible Whisper endpoint
-                client = openai.OpenAI(
-                    api_key=WHISPER_API_KEY,
-                    base_url=WHISPER_ENDPOINT.rstrip('/') if WHISPER_ENDPOINT else None
-                )
-                
-                try:
-                    chunks = await split_audio_fast(state.file_path)
-                except Exception as e:
-                    logger.error(f"Failed to split audio: {e}")
-                    chunks = [state.file_path]  # Fallback to original file
-                temp_dir = Path(chunks[0]).parent if len(chunks) > 1 else None
-
-                batch_size = 5  # Process more chunks in parallel
-                transcripts: List[str] = []
-
-                async def transcribe_chunk_openai(chunk_path: str, chunk_idx: int) -> Optional[str]:
-                    try:
-                        logger.info(f"Transcribing chunk {chunk_idx+1}/{len(chunks)}")
-                        with open(chunk_path, 'rb') as audio_file:
-                            loop = asyncio.get_event_loop()
-                            transcription = await loop.run_in_executor(
-                                None,
-                                lambda: client.audio.transcriptions.create(
-                                    model=TRANSCRIBE_MODEL,
-                                    file=audio_file,
-                                    response_format="text",
-                                    language="en"
-                                )
-                            )
-                            return getattr(transcription, 'text', str(transcription))
-                    except Exception as e:
-                        logger.error("OpenAI chunk failed: %s", str(e)[:300])
-                        return None
-
-                total_batches = (len(chunks) + batch_size - 1) // batch_size
-                job_progress[state.job_id] = {"status": "transcribing", "total_chunks": len(chunks), "completed_chunks": 0, "total_batches": total_batches, "completed_batches": 0}
-                # Progress updated
-
-                for batch_idx, batch_start in enumerate(range(0, len(chunks), batch_size)):
-                    batch_end = min(batch_start + batch_size, len(chunks))
-                    batch_chunks = chunks[batch_start:batch_end]
-                    tasks = [transcribe_chunk_openai(chunk, batch_start + i) for i, chunk in enumerate(batch_chunks)]
-                    batch_results = await asyncio.gather(*tasks)
-                    transcripts.extend([t for t in batch_results if t])
-                    completed_chunks = batch_end
-                    job_progress[state.job_id].update({"completed_chunks": completed_chunks, "completed_batches": batch_idx + 1, "percentage": int((completed_chunks / len(chunks)) * 100)})
-                # Progress updated
-
-                if temp_dir and len(chunks) > 1:
-                    try:
-                        for chunk in chunks:
-                            if chunk != state.file_path:  # Don't delete the original file
-                                Path(chunk).unlink(missing_ok=True)
-                        if temp_dir.exists() and "audio_chunks_" in str(temp_dir):
-                            temp_dir.rmdir()
-                    except Exception as e:
-                        logger.warning(f"Failed to clean up temp chunks: {e}")
-
-                state.transcript = " ".join(transcripts) if transcripts else None
-                if not state.transcript:
-                    state.error = "Failed to transcribe any audio chunks"
-                    state.status = "failed"
-                    if state.job_id in job_progress:
-                        del job_progress[state.job_id]
-                    return state.model_dump()
-
-                elapsed = asyncio.get_event_loop().time() - start_time
-                logger.info(f"Transcription complete: {len(state.transcript)} chars in {elapsed:.1f}s")
-                state.status = "completed"
-                if state.job_id in job_progress:
-                    del job_progress[state.job_id]
-                return state.model_dump()
-                    
-        else:
-            # E2E HTTP path (default)
-            logger.info("Using E2E HTTP path for transcription")
-            if not WHISPER_ENDPOINT:
-                logger.error("WHISPER_ENDPOINT not configured")
-                state.error = "WHISPER_ENDPOINT not configured"
-                state.status = "failed"
-                return state.model_dump()
-            if not WHISPER_API_KEY:
-                logger.error("WHISPER_API_KEY not configured")
-                state.error = "WHISPER_API_KEY not configured"
-                state.status = "failed"
-                return state.model_dump()
-
-            # Split and send chunks to E2E Whisper HTTP endpoint (with fixed chunking)
-            logger.info(f"Starting E2E transcription for file: {state.file_path}")
-            try:
-                chunks = await split_audio_fast(state.file_path)
-                logger.info(f"Audio split into {len(chunks)} chunks")
+                logger.info(f"Transcribing chunk {chunk_idx+1}/{len(chunks)}")
+                with open(chunk_path, 'rb') as audio_file:
+                    loop = asyncio.get_event_loop()
+                    transcription = await loop.run_in_executor(
+                        None,
+                        lambda: client.audio.transcriptions.create(
+                            model=TRANSCRIBE_MODEL,
+                            file=audio_file,
+                            response_format="text",
+                            language="en"
+                        )
+                    )
+                    return getattr(transcription, 'text', str(transcription))
             except Exception as e:
-                logger.error(f"Failed to split audio: {e}")
-                chunks = [state.file_path]  # Fallback to original file
-            temp_dir = Path(chunks[0]).parent if len(chunks) > 1 else None
-            transcripts: List[str] = []
+                logger.error("Transcription chunk failed: %s", str(e)[:300])
+                return None
 
-            async def transcribe_chunk_e2e(chunk_path: str, chunk_idx: int) -> Optional[str]:
-                retries = ASR_RETRY_ATTEMPTS
-                for attempt in range(retries):
-                    try:
-                        logger.info(f"Processing chunk {chunk_idx+1}: {chunk_path} (attempt {attempt+1})")
-                        with open(chunk_path, 'rb') as f:
-                            audio_bytes = f.read()
-                        audio_size = len(audio_bytes)
-                        logger.info(f"Chunk {chunk_idx+1} size: {audio_size} bytes")
-                        
-                        audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
-                        payload = {
-                            "inputs": [
-                                {"name": "audio", "shape": [1], "datatype": "BYTES", "data": [audio_b64]},
-                                {"name": "language", "shape": [1], "datatype": "BYTES", "data": ["English"]},
-                                {"name": "task", "shape": [1], "datatype": "BYTES", "data": ["transcribe"]},
-                                {"name": "max_new_tokens", "shape": [1], "datatype": "INT32", "data": [4096]},
-                                {"name": "return_timestamps", "shape": [1], "datatype": "BYTES", "data": ["none"]}
-                            ]
-                        }
-                        headers = {"Authorization": f"Bearer {WHISPER_API_KEY}", "Content-Type": "application/json"}
-                        
-                        logger.info(f"Sending chunk {chunk_idx+1} to E2E endpoint")
-                        async with httpx.AsyncClient(timeout=ASR_TIMEOUT_SEC) as client_http:
-                            # OpenAI-compatible endpoint base URL from env
-                            endpoint_url = WHISPER_ENDPOINT.rstrip('/') if WHISPER_ENDPOINT else "https://infer.e2enetworks.net/project/p-6530/endpoint/is-6356/v1/"
-                            logger.info(f"POST {endpoint_url}")
-                            resp = await client_http.post(endpoint_url, json=payload, headers=headers)
-                        logger.info(f"Chunk {chunk_idx+1} response status: {resp.status_code}")
-                        
-                        if resp.status_code != 200:
-                            logger.error("E2E Whisper HTTP error %s: %s", resp.status_code, resp.text[:500])
-                            return None
-                            
-                        result = resp.json()
-                        logger.debug(f"Chunk {chunk_idx+1} response keys: {list(result.keys())}")
-                        
-                        # Extract transcript from Triton outputs
-                        if "outputs" in result:
-                            for output in result["outputs"]:
-                                if output.get("name") in ("text", "transcript"):
-                                    data = output.get("data", [])
-                                    if data:
-                                        transcript_text = data[0]
-                                        logger.info(f"Chunk {chunk_idx+1} transcript: {len(transcript_text)} chars")
-                                        return transcript_text
-                        
-                        logger.warning(f"Chunk {chunk_idx+1}: No transcript found in response")
-                        if attempt < retries - 1:
-                            await asyncio.sleep(2)  # Wait before retry
-                            continue
-                        return None
-                    except Exception as e:
-                        logger.error(f"E2E chunk {chunk_idx+1} failed (attempt {attempt+1}): {str(e)[:200]}")
-                        if attempt < retries - 1:
-                            await asyncio.sleep(2)  # Wait before retry
-                            continue
-                        return None
-                return None  # All retries exhausted
+        total_batches = (len(chunks) + batch_size - 1) // batch_size
+        job_progress[state.job_id] = {
+            "status": "transcribing", 
+            "total_chunks": len(chunks), 
+            "completed_chunks": 0, 
+            "total_batches": total_batches, 
+            "completed_batches": 0
+        }
 
-            batch_size = 5  # Process more chunks in parallel
-            total_batches = (len(chunks) + batch_size - 1) // batch_size
-            job_progress[state.job_id] = {"status": "transcribing", "total_chunks": len(chunks), "completed_chunks": 0, "total_batches": total_batches, "completed_batches": 0}
-            # Progress updated
+        for batch_idx, batch_start in enumerate(range(0, len(chunks), batch_size)):
+            batch_end = min(batch_start + batch_size, len(chunks))
+            batch_chunks = chunks[batch_start:batch_end]
+            tasks = [transcribe_chunk(chunk, batch_start + i) for i, chunk in enumerate(batch_chunks)]
+            batch_results = await asyncio.gather(*tasks)
+            transcripts.extend([t for t in batch_results if t])
+            completed_chunks = batch_end
+            job_progress[state.job_id].update({
+                "completed_chunks": completed_chunks, 
+                "completed_batches": batch_idx + 1, 
+                "percentage": int((completed_chunks / len(chunks)) * 100)
+            })
 
-            for batch_idx, batch_start in enumerate(range(0, len(chunks), batch_size)):
-                batch_end = min(batch_start + batch_size, len(chunks))
-                batch_chunks = chunks[batch_start:batch_end]
-                tasks = [transcribe_chunk_e2e(chunk, batch_start + i) for i, chunk in enumerate(batch_chunks)]
-                batch_results = await asyncio.gather(*tasks)
-                transcripts.extend([t for t in batch_results if t])
-                completed_chunks = batch_end
-                job_progress[state.job_id].update({"completed_chunks": completed_chunks, "completed_batches": batch_idx + 1, "percentage": int((completed_chunks / len(chunks)) * 100)})
-            # Progress updated
+        # Clean up temp chunks
+        if temp_dir and len(chunks) > 1:
+            try:
+                for chunk in chunks:
+                    if chunk != state.file_path:
+                        Path(chunk).unlink(missing_ok=True)
+                if temp_dir.exists() and "audio_chunks_" in str(temp_dir):
+                    temp_dir.rmdir()
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp chunks: {e}")
 
-            # Clean up temporary chunk files
-            if temp_dir and len(chunks) > 1:  # Only clean up if we actually created chunks
-                try:
-                    for chunk in chunks:
-                        if chunk != state.file_path:  # Don't delete the original file
-                            Path(chunk).unlink(missing_ok=True)
-                    if temp_dir.exists():
-                        # Only remove directory if it's actually a temp directory
-                        if "audio_chunks_" in str(temp_dir):
-                            temp_dir.rmdir()
-                except Exception as e:
-                    logger.warning(f"Failed to clean up temp chunks: {e}")
-            
-            state.transcript = " ".join(transcripts) if transcripts else None
-            if not state.transcript:
-                state.error = "Failed to transcribe any audio chunks"
-                state.status = "failed"
-                if state.job_id in job_progress:
-                    del job_progress[state.job_id]
-                return state.model_dump()
-
-            elapsed = asyncio.get_event_loop().time() - start_time
-            logger.info(f"Transcription complete: {len(state.transcript)} chars in {elapsed:.1f}s")
-            state.status = "completed"
+        state.transcript = " ".join(transcripts) if transcripts else None
+        if not state.transcript:
+            state.error = "Failed to transcribe any audio chunks"
+            state.status = "failed"
             if state.job_id in job_progress:
                 del job_progress[state.job_id]
             return state.model_dump()
+
+        elapsed = asyncio.get_event_loop().time() - start_time
+        logger.info(f"Transcription complete: {len(state.transcript)} chars in {elapsed:.1f}s")
+        state.status = "completed"
+        if state.job_id in job_progress:
+            del job_progress[state.job_id]
+        return state.model_dump()
             
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
