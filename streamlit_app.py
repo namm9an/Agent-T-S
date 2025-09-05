@@ -183,6 +183,7 @@ async def get_job_result(job_id: str):
 def main():
     st.title("🎙️ Audio Transcription & Summarization")
     st.markdown("Upload an audio file to get an AI-powered transcript and summary")
+    st.caption(f"Backend: {API_URL}")
     
     # Sidebar for settings
     with st.sidebar:
